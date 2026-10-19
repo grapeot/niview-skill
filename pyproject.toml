@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "niview-skill"
+version = "0.1.0"
+description = "Agent-friendly CLI for NiView consumer cameras"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "grapeot" }]
+dependencies = [
+  "requests>=2.31",
+  "pycryptodome>=3.20",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.5",
+]
+
+[project.scripts]
+niview = "niview_skill.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+  "integration: requires NIVIEW_INTEGRATION=1 and a live token",
+]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
