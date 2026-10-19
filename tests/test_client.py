@@ -155,3 +155,35 @@ def test_image_transport_error_does_not_echo_url():
     with pytest.raises(NiViewError) as caught:
         client.download_image("https://example.com/a.jpg?signature=secret")
     assert "signature" not in caught.value.msg
+
+
+def test_iter_events_production_paginates():
+    from conftest import FakeResponse, FakeSession, envelope
+
+    page1 = [{"id": "e1"}, {"id": "e2"}]
+    page2 = [{"id": "e3"}]
+    session = FakeSession(
+        [FakeResponse(envelope(page1)), FakeResponse(envelope(page2))]
+    )
+    client = NiViewClient(session=session)
+    events = list(client.iter_events(7, 1, 0, 86400, page_size=2))
+    assert [event["id"] for event in events] == ["e1", "e2", "e3"]
+
+
+def test_iter_events_rejects_repeated_page():
+    from conftest import FakeResponse, FakeSession, envelope
+
+    page = [{"id": "e1"}, {"id": "e2"}]
+    session = FakeSession([FakeResponse(envelope(page)), FakeResponse(envelope(page))])
+    client = NiViewClient(session=session)
+    with pytest.raises(NiViewError):
+        list(client.iter_events(7, 1, 0, 86400, page_size=2))
+
+
+def test_vendor_401_on_http_500_is_auth_error():
+    session = FakeSession(
+        [FakeResponse({"code": -401, "msg": "expired", "data": None}, status_code=500)]
+    )
+    client = NiViewClient(session=session)
+    with pytest.raises(AuthError):
+        client.devices(7)

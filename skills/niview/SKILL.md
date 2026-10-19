@@ -100,8 +100,8 @@ Authenticate on the host, then:
 docker compose up -d
 ```
 
-The container reads `.env`, writes to `./data`, runs as non-root, and has a
-read-only root filesystem. Do not put credentials in the image.
+The container reads `.env`, writes to the named volume `niview-data`, runs as
+non-root, and has a read-only root filesystem. Do not put credentials in the image.
 
 ## Acceptance Criteria
 

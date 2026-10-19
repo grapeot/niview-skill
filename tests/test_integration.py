@@ -61,5 +61,6 @@ def test_live_poll_once(tmp_path):
         state_path=tmp_path / "state.db",
         days=7,
     )
-    assert result.scanned >= 0
+    assert not result.errors
+    assert result.downloaded == len(result.files)
     assert all(Path(path).exists() for path in result.files)

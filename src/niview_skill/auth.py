@@ -142,6 +142,7 @@ def status(cfg: Config) -> dict:
     client = NiViewClient(host=cfg.host, token=cfg.token)
     devices = client.devices(cfg.uid)
     return {
+        "ok": True,
         "account": cfg.account,
         "uid": cfg.uid,
         "host": cfg.host,

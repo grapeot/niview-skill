@@ -85,11 +85,11 @@ class NiViewClient:
         code = body.get("code")
         msg = body.get("msg") or ""
         body["http_status"] = status
+        if code == -401:
+            raise AuthError(code, msg, status)
         if status >= 400:
             raise NiViewError(code, msg or f"HTTP {status}", status)
         if code is not None and code != 0:
-            if code == -401:
-                raise AuthError(code, msg, status)
             raise NiViewError(code, msg, status)
 
         data = body.get("data")
@@ -204,6 +204,8 @@ class NiViewClient:
         page_size: int = 100,
         max_pages: int = 100,
     ):
+        if page_size < 1:
+            raise NiViewError(None, "page_size must be positive")
         seen: set[str] = set()
         page = 1
         while page <= max_pages:
@@ -227,9 +229,12 @@ class NiViewClient:
                     seen.add(event_id)
                 new_items += 1
                 yield event
-            if len(batch) < page_size or new_items == 0:
+            if new_items == 0:
+                raise NiViewError(None, "event pagination repeated a page; results incomplete")
+            if len(batch) < page_size:
                 return
             page += 1
+        raise NiViewError(None, "event pagination limit reached; results incomplete")
 
     def download_image(self, url: str) -> tuple[bytes, tuple[int, int] | None]:
         try:
