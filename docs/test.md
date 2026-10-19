@@ -23,7 +23,9 @@
   - Output path is stable and device names are sanitized.
   - Invalid image bytes fail loudly.
 
-All unit tests use monkeypatched HTTP and synthetic fixtures. No network.
+All unit tests use monkeypatched HTTP and synthetic fixtures. An autouse
+fixture denies real network access in offline tests; integration tests are
+explicitly exempt.
 
 ## Integration Tests (opt-in)
 
@@ -38,7 +40,7 @@ Coverage:
 - `auth status` / `devices` against the live account.
 - `events` for a device with recent activity.
 - `snapshot` produces a file whose first bytes are a JPEG SOI marker.
-- Poller `--once` against a live account, with a temporary output directory.
+- `poll_once` against a live account, with a temporary output directory.
 
 Integration tests are skipped by default so CI never needs credentials.
 

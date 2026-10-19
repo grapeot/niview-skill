@@ -4,10 +4,13 @@ services:
     env_file: .env
     command: ["poll", "--interval", "300", "--out", "/data/niview"]
     volumes:
-      - ./data:/data
+      - niview-data:/data
     restart: unless-stopped
     read_only: true
     tmpfs:
       - /tmp
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  niview-data:
