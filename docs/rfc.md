@@ -46,8 +46,9 @@ parsing.
 ## Authentication and Token Lifecycle
 
 - `auth login` is the only command that accepts a password.
-- Modes: interactive prompt, 1Password references (`op read`), or importing an
-  existing token.
+- Modes: interactive prompt, 1Password references (`op read`), importing an
+  existing token, or reading `NIVIEW_ACCOUNT`/`NIVIEW_PASSWORD` from the
+  environment for CI (`--mode env`).
 - The password is never written to disk.
 - The token is written to `.env` atomically with mode `0600`, together with
   `NIVIEW_ACCOUNT`, `NIVIEW_HOST`, and `NIVIEW_TOKEN_AT`.
@@ -67,20 +68,23 @@ niview poll [--once] [--interval SECONDS] [--out DIR] [--state PATH] [--json]
 niview decrypt --in FILE --out FILE
 ```
 
-Errors preserve the HTTP status, vendor `code`, and vendor `msg`. JSON output
-uses a stable envelope:
+Errors preserve the HTTP status, vendor `code`, and vendor `msg`. The success
+shapes are:
 
-```json
-{"ok": true, "data": {}}
-{"ok": false, "error": {"http_status": 200, "code": -401, "msg": "Unauthorized"}}
-```
+- `devices` and `events`: a JSON array.
+- `auth login`, `auth status`, `snapshot`, and `poll`: an object with `ok: true`.
+- errors: `{"ok": false, "error": {"http_status": ..., "code": ..., "msg": ...}}`.
+
+`--env-file` is a root-parser option: `niview --env-file PATH devices --json`.
+JSON error handling covers runtime errors, not argparse usage errors.
 
 ## Poller
 
 - State is stored in SQLite (`state.db` by default) with `event_id` as the
   primary key.
-- For each device, fetch event dates, then events for dates inside the lookback
-  window.
+- For each device, fetch event dates whose day interval intersects the lookback
+  window, then page through events until exhaustion. Events are filtered by
+  `createDate` against the exact cutoff.
 - Skip events already in the state table.
 - Download, decrypt, and write snapshots under
   `<out>/<device-slug>/<YYYY-MM-DD>/<createDate>-<event_id>.jpg`.
@@ -91,8 +95,9 @@ uses a stable envelope:
 
 - Multi-stage-free `python:3.12-slim` image.
 - Non-root user.
-- `docker-compose.yml` mounts `./data`, reads `.env`, and runs
-  `poll --interval 300`.
+- `docker-compose.yml` mounts the named volume `niview-data`, reads `.env`, and
+  runs `poll --interval 300`. For a host bind mount, provision the directory for
+  UID 10001 first.
 - Authentication is a host-side operation. The container only consumes the
   token. For 1Password, run `auth login` on the host (or inside a one-off
   container with a TTY) and let Compose read the resulting `.env`.

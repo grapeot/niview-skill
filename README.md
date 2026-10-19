@@ -33,7 +33,7 @@ The package exposes the `niview` command.
 
 ## Authentication
 
-The CLI supports three ways to obtain a session token.
+The CLI supports four ways to obtain a session token.
 
 Interactive:
 
@@ -54,14 +54,18 @@ The CLI uses `op read` and never writes the password to disk.
 Import an existing token:
 
 ```bash
-niview auth login --mode token --token "$NIVIEW_TOKEN"
+niview auth login --mode token --token "$NIVIEW_TOKEN" --uid 123
 ```
+
+For CI or a local one-off, `--mode env` reads `NIVIEW_ACCOUNT` and
+`NIVIEW_PASSWORD` from the environment. It never writes the password.
 
 `auth login` resolves the account region, logs in, verifies the token by
 listing devices, and writes a `.env` file atomically with mode `0600`:
 
 ```dotenv
 NIVIEW_ACCOUNT=alice@example.com
+NIVIEW_UID=123
 NIVIEW_HOST=cloud-us1.niceviewer.com
 NIVIEW_TOKEN=...
 NIVIEW_TOKEN_AT=0
@@ -83,7 +87,7 @@ niview poll --once --out data/niview
 ```
 
 All commands accept `--json` where the output is useful to another program.
-The default env file is `./.env`; use `--env-file` to point elsewhere.
+The default env file is `./.env`; use the root option `niview --env-file PATH devices --json` to point elsewhere.
 
 ## Docker
 
@@ -94,8 +98,11 @@ niview auth login --mode 1password
 docker compose up -d
 ```
 
-The container reads `.env`, writes snapshots to `./data`, runs as a non-root
-user, and has a read-only root filesystem. Do not bake credentials into the
+The container reads `.env`, writes snapshots to the named volume
+`niview-data`, runs as a non-root user, and has a read-only root filesystem.
+Copy snapshots to the host with `docker compose cp niview:/data/niview ./data`.
+If you prefer a bind mount, create `./data` and make it writable by UID 10001
+(for example `sudo chown 10001:10001 data`). Do not bake credentials into the
 image.
 
 ## Event snapshots
@@ -106,8 +113,9 @@ object storage and returns a URL ending in `.encrypt`. The CLI downloads and
 decrypts it with the same AES key used by the mobile client.
 
 The observed event snapshots are 640x360 JPEGs. Treat the dimensions as
-data-dependent; the CLI validates the decrypted bytes as a JPEG rather than
-assuming a fixed size.
+data-dependent; the CLI validates the decrypted bytes as a complete JPEG
+rather than assuming a fixed size. `snapshot` without `--out` writes to
+`data/snapshots/`, which is gitignored.
 
 ## Development
 

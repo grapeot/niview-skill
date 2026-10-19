@@ -1,5 +1,6 @@
 import argparse
 import json
+import sqlite3
 import sys
 import time
 from pathlib import Path
@@ -177,14 +178,24 @@ def _run_snapshot(args, cfg: Config) -> int:
     if not image_url:
         raise NiViewError(None, f"event {event.get('id')} has no image")
     data, size = client.download_image(image_url)
+    try:
+        create_date = int(event.get("createDate") or 0)
+    except (TypeError, ValueError) as exc:
+        raise NiViewError(None, f"invalid event timestamp: {exc}") from exc
+    if create_date <= 0:
+        raise NiViewError(None, "invalid event timestamp")
     if args.out:
         target = Path(args.out)
     else:
         target = Path(
-            f"snapshot-{slugify(client.device_name(device))}-{event['createDate']}.jpg"
+            "data/snapshots/"
+            f"snapshot-{slugify(client.device_name(device))}-{create_date}.jpg"
         )
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    except OSError as exc:
+        raise NiViewError(None, f"snapshot write failed: {exc}") from exc
     payload = {
         "ok": True,
         "path": str(target),
@@ -281,6 +292,13 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"ok": False, "error": exc.as_dict()}, ensure_ascii=False))
         else:
             print(f"error: http={exc.http_status} code={exc.code} msg={exc.msg}", file=sys.stderr)
+        return 1
+    except (OSError, sqlite3.Error) as exc:
+        error = {"http_status": None, "code": None, "msg": str(exc)}
+        if as_json:
+            print(json.dumps({"ok": False, "error": error}, ensure_ascii=False))
+        else:
+            print(f"error: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         return 130

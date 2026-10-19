@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .client import NiViewClient
-from .errors import NiViewError
+from .errors import AuthError, NiViewError
 from .state import EventStore
 
 
@@ -39,6 +39,28 @@ def _date_dir(create_date: int) -> str:
     return datetime.fromtimestamp(create_date, tz=UTC).strftime("%Y-%m-%d")
 
 
+def _event_time(event: dict) -> int:
+    try:
+        return int(event.get("createDate") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _error_text(exc: NiViewError) -> str:
+    return f"http={exc.http_status} code={exc.code} msg={exc.msg}"
+
+
+def _day_intersects(day: int, cutoff: int, upper: int) -> bool:
+    return day + 86400 > cutoff and day <= upper
+
+
+def _dates(values: list) -> list[int]:
+    try:
+        return sorted(int(value) for value in values)
+    except (TypeError, ValueError) as exc:
+        raise NiViewError(None, f"invalid event date list: {exc}") from exc
+
+
 def list_events(
     client: NiViewClient,
     uid: int,
@@ -52,20 +74,26 @@ def list_events(
     did = client.device_id(device)
     now = int(time.time())
     cutoff = since if since is not None else now - max(days, 1) * 86400
-    dates = client.event_dates(uid, did, mess_type)
-    if not isinstance(dates, list):
-        raise NiViewError(None, f"invalid event dates for {client.device_name(device)}")
+    dates = _dates(client.event_dates(uid, did, mess_type))
     events: list[dict] = []
-    for day in sorted(dates):
-        if day < cutoff:
+    for day in dates:
+        if not _day_intersects(day, cutoff, now):
             continue
-        for event in client.events(
-            uid, did, day, day + 86400, mess_type=mess_type, page=1, limit=limit
+        for event in client.iter_events(
+            uid,
+            did,
+            day,
+            day + 86400,
+            mess_type=mess_type,
+            page_size=limit,
         ):
+            timestamp = _event_time(event)
+            if timestamp < cutoff or timestamp > now:
+                continue
             event["device_id"] = did
             event["device_name"] = client.device_name(device)
             events.append(event)
-    events.sort(key=lambda item: item.get("createDate", 0))
+    events.sort(key=_event_time)
     return events
 
 
@@ -78,15 +106,22 @@ def latest_event(
     limit: int = 100,
 ) -> dict:
     did = client.device_id(device)
-    dates = client.event_dates(uid, did, mess_type)
-    if not isinstance(dates, list) or not dates:
+    dates = _dates(client.event_dates(uid, did, mess_type))
+    if not dates:
         raise NiViewError(None, f"no events for device {client.device_name(device)}")
-    for day in sorted(dates, reverse=True):
-        events = client.events(
-            uid, did, day, day + 86400, mess_type=mess_type, page=1, limit=limit
+    for day in reversed(dates):
+        events = list(
+            client.iter_events(
+                uid,
+                did,
+                day,
+                day + 86400,
+                mess_type=mess_type,
+                page_size=limit,
+            )
         )
         if events:
-            event = max(events, key=lambda item: item.get("createDate", 0))
+            event = max(events, key=_event_time)
             event["device_id"] = did
             event["device_name"] = client.device_name(device)
             return event
@@ -108,46 +143,51 @@ def poll_once(
     out_root = Path(out_dir)
     out_root.mkdir(parents=True, exist_ok=True)
     result = PollResult()
-    cutoff = (now if now is not None else int(time.time())) - max(days, 1) * 86400
+    upper = now if now is not None else int(time.time())
+    cutoff = upper - max(days, 1) * 86400
 
     with EventStore(state_path) as store:
         for device in devices:
             did = client.device_id(device)
-            device_dir = out_root / slugify(client.device_name(device), f"device-{did}")
+            name = client.device_name(device)
+            device_dir = out_root / slugify(name, f"device-{did}")
             try:
-                dates = client.event_dates(uid, did, mess_type)
+                dates = _dates(client.event_dates(uid, did, mess_type))
+            except AuthError:
+                raise
             except NiViewError as exc:
-                result.errors.append(f"{client.device_name(device)}: {exc.msg}")
+                result.errors.append(f"{name}: {_error_text(exc)}")
                 continue
-            if not isinstance(dates, list):
-                result.errors.append(f"{client.device_name(device)}: invalid event dates")
-                continue
-            for day in sorted(dates):
-                if day < cutoff:
+            for day in dates:
+                if not _day_intersects(day, cutoff, upper):
                     continue
                 try:
-                    events = client.events(
-                        uid,
-                        did,
-                        day,
-                        day + 86400,
-                        mess_type=mess_type,
-                        page=1,
-                        limit=limit,
+                    events = list(
+                        client.iter_events(
+                            uid,
+                            did,
+                            day,
+                            day + 86400,
+                            mess_type=mess_type,
+                            page_size=limit,
+                        )
                     )
+                except AuthError:
+                    raise
                 except NiViewError as exc:
-                    result.errors.append(f"{client.device_name(device)} {day}: {exc.msg}")
-                    continue
-                if not isinstance(events, list):
-                    result.errors.append(f"{client.device_name(device)} {day}: invalid events")
+                    result.errors.append(f"{name} {day}: {_error_text(exc)}")
                     continue
                 for event in events:
                     result.scanned += 1
                     event_id = str(event.get("id") or "")
                     if not event_id:
-                        result.errors.append(
-                            f"{client.device_name(device)}: event without id"
-                        )
+                        result.errors.append(f"{name}: event without id")
+                        continue
+                    create_date = _event_time(event)
+                    if create_date <= 0:
+                        result.errors.append(f"{event_id}: invalid createDate")
+                        continue
+                    if create_date < cutoff or create_date > upper:
                         continue
                     if store.seen(event_id):
                         result.skipped += 1
@@ -156,11 +196,12 @@ def poll_once(
                     if not image_url:
                         result.errors.append(f"{event_id}: no imgUrl")
                         continue
-                    create_date = int(event.get("createDate") or 0)
                     try:
                         data, _ = client.download_image(image_url)
+                    except AuthError:
+                        raise
                     except NiViewError as exc:
-                        result.errors.append(f"{event_id}: {exc.msg}")
+                        result.errors.append(f"{event_id}: {_error_text(exc)}")
                         continue
                     target = (
                         device_dir

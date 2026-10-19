@@ -50,12 +50,13 @@ niview auth login --mode 1password
 Import a token:
 
 ```bash
-niview auth login --mode token --token "$NIVIEW_TOKEN"
+niview auth login --mode token --token "$NIVIEW_TOKEN" --uid 123
 ```
 
 `auth login` writes a `.env` with mode `0600` containing `NIVIEW_ACCOUNT`,
-`NIVIEW_HOST`, `NIVIEW_TOKEN`, and `NIVIEW_TOKEN_AT`. It never writes the
-password. If the token expires, the CLI exits `2`; run `auth login` again.
+`NIVIEW_UID`, `NIVIEW_HOST`, `NIVIEW_TOKEN`, and `NIVIEW_TOKEN_AT`. It never
+writes the password. `--mode env` reads `NIVIEW_ACCOUNT` and
+`NIVIEW_PASSWORD` from the environment for CI or one-off runs. If the token expires, the CLI exits `2`; run `auth login` again.
 
 ## Commands
 
@@ -68,8 +69,8 @@ niview poll --once --out data/niview
 niview poll --interval 300 --out data/niview
 ```
 
-Use `--json` for machine-readable output. Use `--env-file` to point at a
-non-default env file.
+Use `--json` for machine-readable output. `--env-file` is a root option:
+`niview --env-file PATH devices --json`.
 
 ## Output Contract
 
@@ -107,8 +108,8 @@ read-only root filesystem. Do not put credentials in the image.
 - `niview auth login --mode interactive` and `--mode 1password` both produce a
   working `.env` with mode `0600`.
 - `niview devices` lists the account's cameras.
-- `niview events --days 2 --json` returns events with an `image_url`.
-- `niview snapshot` writes a valid JPEG.
+- `niview events --device <name-or-id> --days 2 --json` returns events with an `image_url`.
+- `niview snapshot --device <name-or-id>` writes a valid JPEG (default under `data/snapshots/`).
 - `niview poll --once` is idempotent: a second run downloads zero new files.
 - `docker compose up -d` runs the poller and writes to the mounted volume.
 - `ruff check .` and `pytest` pass.

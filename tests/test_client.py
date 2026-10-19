@@ -1,8 +1,11 @@
 import pytest
-from conftest import FakeResponse, FakeSession, envelope
+import requests
+from conftest import FakeResponse, FakeSession, envelope, fake_jpeg
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad
 
 from niview_skill.client import NiViewClient
-from niview_skill.crypto import decrypt_query
+from niview_skill.crypto import AES_KEY, decrypt_query
 from niview_skill.errors import AuthError, NiViewError
 
 
@@ -74,3 +77,81 @@ def test_download_image_rejects_non_jpeg():
     client = NiViewClient(session=session)
     with pytest.raises(NiViewError):
         client.download_image("https://example.com/a.jpg")
+
+
+def test_vendor_error_raises():
+    session = FakeSession([FakeResponse({"code": -500, "msg": "synthetic", "data": None})])
+    client = NiViewClient(session=session)
+    with pytest.raises(NiViewError) as exc:
+        client.devices(7)
+    assert exc.value.code == -500
+    assert exc.value.msg == "synthetic"
+
+
+def test_http_error_with_vendor_code_raises():
+    session = FakeSession(
+        [FakeResponse({"code": -500, "msg": "synthetic", "data": None}, status_code=500)]
+    )
+    client = NiViewClient(session=session)
+    with pytest.raises(NiViewError) as exc:
+        client.devices(7)
+    assert exc.value.http_status == 500
+
+
+def test_wrong_payload_shape_raises():
+    session = FakeSession([FakeResponse(envelope({"not": "a list"}))])
+    client = NiViewClient(session=session)
+    with pytest.raises(NiViewError):
+        client.devices(7)
+
+
+def test_http_401_without_json_is_auth_error():
+    session = FakeSession([FakeResponse(payload=None, status_code=401, text="no")])
+    client = NiViewClient(session=session)
+    with pytest.raises(AuthError):
+        client.devices(7)
+
+
+class RaisingSession:
+    def __init__(self, exc):
+        self.exc = exc
+
+    def request(self, *args, **kwargs):
+        raise self.exc
+
+    def get(self, *args, **kwargs):
+        raise self.exc
+
+
+def test_transport_error_does_not_echo_url():
+    exc = requests.ConnectionError("https://cloud.example/v1/user/user_e?pass=secret")
+    client = NiViewClient(session=RaisingSession(exc))
+    with pytest.raises(NiViewError) as caught:
+        client.login("alice@example.com", "secret")
+    assert "secret" not in caught.value.msg
+    assert "https://" not in caught.value.msg
+
+
+def test_encrypted_image_with_query_string_is_decrypted():
+    payload = fake_jpeg(640, 360)
+    encrypted = AES.new(AES_KEY, AES.MODE_ECB).encrypt(pad(payload, 16))
+    session = FakeSession([FakeResponse(content=encrypted)])
+    client = NiViewClient(session=session)
+    data, size = client.download_image("https://example.com/a.jpg.encrypt?sig=1")
+    assert data == payload
+    assert size == (640, 360)
+
+
+def test_truncated_jpeg_is_rejected():
+    session = FakeSession([FakeResponse(content=b"\xff\xd8")])
+    client = NiViewClient(session=session)
+    with pytest.raises(NiViewError):
+        client.download_image("https://example.com/a.jpg")
+
+
+def test_image_transport_error_does_not_echo_url():
+    exc = requests.ConnectionError("https://example.com/a.jpg?signature=secret")
+    client = NiViewClient(session=RaisingSession(exc))
+    with pytest.raises(NiViewError) as caught:
+        client.download_image("https://example.com/a.jpg?signature=secret")
+    assert "signature" not in caught.value.msg

@@ -1,6 +1,20 @@
 import json
 
+import pytest
+
 from niview_skill.crypto import encrypt_query
+
+
+@pytest.fixture(autouse=True)
+def no_network(request, monkeypatch):
+    if request.node.get_closest_marker("integration"):
+        return
+
+    def deny(*args, **kwargs):
+        raise AssertionError("network access in an offline test")
+
+    monkeypatch.setattr("requests.sessions.Session.request", deny)
+    monkeypatch.setattr("requests.sessions.Session.get", deny)
 
 
 def fake_jpeg(width: int = 640, height: int = 360) -> bytes:

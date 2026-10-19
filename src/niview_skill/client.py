@@ -1,4 +1,6 @@
 import json
+import time
+import urllib.parse
 
 import requests
 
@@ -32,8 +34,6 @@ class NiViewClient:
         return f"https://{self.host}:{self.port}/"
 
     def headers(self) -> dict[str, str]:
-        import time
-
         return {
             "timestamp": encrypt_query(str(int(time.time() * 1000))),
             "token": encrypt_query(self.token),
@@ -53,26 +53,44 @@ class NiViewClient:
                 **kwargs,
             )
         except requests.RequestException as exc:
-            raise NiViewError(None, f"request failed: {exc}") from exc
+            # Do not include the URL: login query values are recoverable
+            # credentials, and signed image URLs are bearer-like.
+            raise NiViewError(None, f"request failed ({type(exc).__name__})") from exc
+
+        status = response.status_code
+        if status == 401:
+            code = None
+            msg = "HTTP 401"
+            try:
+                body = response.json()
+                if isinstance(body, dict):
+                    code = body.get("code")
+                    msg = body.get("msg") or msg
+            except ValueError:
+                pass
+            raise AuthError(code, msg, status)
 
         try:
             body = response.json()
         except ValueError as exc:
             raise NiViewError(
                 None,
-                f"non-JSON response ({response.status_code}): {response.text[:200]}",
-                response.status_code,
+                f"non-JSON response (HTTP {status})",
+                status,
             ) from exc
 
         if not isinstance(body, dict):
-            raise NiViewError(None, "unexpected response shape", response.status_code)
+            raise NiViewError(None, "unexpected response shape", status)
 
         code = body.get("code")
         msg = body.get("msg") or ""
-        if code == -401:
-            raise AuthError(code, msg, response.status_code)
-        if response.status_code >= 400 and code is None:
-            raise NiViewError(code, msg or response.reason, response.status_code)
+        body["http_status"] = status
+        if status >= 400:
+            raise NiViewError(code, msg or f"HTTP {status}", status)
+        if code is not None and code != 0:
+            if code == -401:
+                raise AuthError(code, msg, status)
+            raise NiViewError(code, msg, status)
 
         data = body.get("data")
         if isinstance(data, str) and data:
@@ -82,7 +100,7 @@ class NiViewClient:
                 raise NiViewError(
                     code,
                     f"response decryption failed: {exc}",
-                    response.status_code,
+                    status,
                 ) from exc
         return body
 
@@ -93,22 +111,33 @@ class NiViewClient:
         return self._request("POST", path, json=payload)
 
     @staticmethod
-    def _payload(body: dict):
+    def _payload(body: dict, expected_type: type | None = None):
         raw = body.get("data_decrypted")
         if not raw:
-            return None
+            raise NiViewError(
+                body.get("code"),
+                "empty response payload",
+                body.get("http_status"),
+            )
         try:
-            return json.loads(raw)
+            parsed = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise NiViewError(
                 body.get("code"),
                 f"invalid JSON payload: {exc}",
+                body.get("http_status"),
             ) from exc
+        if expected_type is not None and not isinstance(parsed, expected_type):
+            raise NiViewError(
+                body.get("code"),
+                f"unexpected payload type: {type(parsed).__name__}",
+                body.get("http_status"),
+            )
+        return parsed
 
     def region(self, account: str) -> dict:
-        return self._payload(
-            self.get("v1/user/userRegion", account=encrypt_query(account))
-        ) or {}
+        body = self.get("v1/user/userRegion", account=encrypt_query(account))
+        return self._payload(body, dict)
 
     def login(self, account: str, password: str) -> dict:
         if "@" in account:
@@ -123,32 +152,24 @@ class NiViewClient:
                 phone=encrypt_query(account),
                 **{"pass": encrypt_query(password)},
             )
-        payload = self._payload(body)
-        if payload is None:
-            raise NiViewError(body.get("code"), body.get("msg") or "login failed")
-        return payload
+        return self._payload(body, dict)
 
     def devices(self, uid: int) -> list[dict]:
-        payload = self._payload(
-            self.get("v1/device/devices", uid=encrypt_query(str(uid)))
-        )
-        return payload if isinstance(payload, list) else []
+        body = self.get("v1/device/devices", uid=encrypt_query(str(uid)))
+        return self._payload(body, list)
 
     def device_info(self, did: int) -> dict:
-        return self._payload(
-            self.get("v1/device/getDeviceInfo", did=encrypt_query(str(did)))
-        ) or {}
+        body = self.get("v1/device/getDeviceInfo", did=encrypt_query(str(did)))
+        return self._payload(body, dict)
 
     def event_dates(self, uid: int, did: int, mess_type: int = -1) -> list[int]:
-        payload = self._payload(
-            self.get(
-                "v1/devMess/devMessDates",
-                uid=encrypt_query(str(uid)),
-                did=encrypt_query(str(did)),
-                messType=encrypt_query(str(mess_type)),
-            )
+        body = self.get(
+            "v1/devMess/devMessDates",
+            uid=encrypt_query(str(uid)),
+            did=encrypt_query(str(did)),
+            messType=encrypt_query(str(mess_type)),
         )
-        return payload if isinstance(payload, list) else []
+        return self._payload(body, list)
 
     def events(
         self,
@@ -160,33 +181,78 @@ class NiViewClient:
         page: int = 1,
         limit: int = 100,
     ) -> list[dict]:
-        payload = self._payload(
-            self.get(
-                "v1/devMess/devMess",
-                uid=encrypt_query(str(uid)),
-                did=encrypt_query(str(did)),
-                messType=encrypt_query(str(mess_type)),
-                startDate=encrypt_query(str(int(start))),
-                endDate=encrypt_query(str(int(end))),
-                page=encrypt_query(str(page)),
-                limit=encrypt_query(str(limit)),
-            )
+        body = self.get(
+            "v1/devMess/devMess",
+            uid=encrypt_query(str(uid)),
+            did=encrypt_query(str(did)),
+            messType=encrypt_query(str(mess_type)),
+            startDate=encrypt_query(str(int(start))),
+            endDate=encrypt_query(str(int(end))),
+            page=encrypt_query(str(page)),
+            limit=encrypt_query(str(limit)),
         )
-        return payload if isinstance(payload, list) else []
+        return self._payload(body, list)
+
+    def iter_events(
+        self,
+        uid: int,
+        did: int,
+        start: int,
+        end: int,
+        *,
+        mess_type: int = -1,
+        page_size: int = 100,
+        max_pages: int = 100,
+    ):
+        seen: set[str] = set()
+        page = 1
+        while page <= max_pages:
+            batch = self.events(
+                uid,
+                did,
+                start,
+                end,
+                mess_type=mess_type,
+                page=page,
+                limit=page_size,
+            )
+            if not batch:
+                return
+            new_items = 0
+            for event in batch:
+                event_id = str(event.get("id") or "")
+                if event_id and event_id in seen:
+                    continue
+                if event_id:
+                    seen.add(event_id)
+                new_items += 1
+                yield event
+            if len(batch) < page_size or new_items == 0:
+                return
+            page += 1
 
     def download_image(self, url: str) -> tuple[bytes, tuple[int, int] | None]:
         try:
             response = self.session.get(url, timeout=self.timeout)
         except requests.RequestException as exc:
-            raise NiViewError(None, f"image download failed: {exc}") from exc
+            raise NiViewError(
+                None,
+                f"image download failed ({type(exc).__name__})",
+            ) from exc
         if response.status_code != 200:
             raise NiViewError(None, f"image download HTTP {response.status_code}")
         data = response.content
-        if url.endswith(".encrypt"):
-            data = decrypt_bytes(data)
-        if not data.startswith(b"\xff\xd8"):
-            raise NiViewError(None, "downloaded payload is not a JPEG")
-        return data, jpeg_size(data)
+        if urllib.parse.urlsplit(url).path.endswith(".encrypt"):
+            try:
+                data = decrypt_bytes(data)
+            except Exception as exc:
+                raise NiViewError(None, f"image decryption failed: {exc}") from exc
+        if not data.startswith(b"\xff\xd8") or b"\xff\xd9" not in data[-1024:]:
+            raise NiViewError(None, "downloaded payload is not a complete JPEG")
+        size = jpeg_size(data)
+        if size is None:
+            raise NiViewError(None, "downloaded JPEG has no readable dimensions")
+        return data, size
 
     @staticmethod
     def device_name(user_device: dict) -> str:

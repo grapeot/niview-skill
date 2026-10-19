@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .client import NiViewClient
 from .config import Config, write_env
-from .errors import NiViewError
+from .errors import AuthError, NiViewError
 
 
 @dataclass
@@ -136,9 +136,9 @@ def login_and_write(
 
 def status(cfg: Config) -> dict:
     if not cfg.token:
-        raise NiViewError(None, "no token in env; run `niview auth login`")
+        raise AuthError(None, "no token in env; run `niview auth login`")
     if cfg.uid is None:
-        raise NiViewError(None, "no NIVIEW_UID in env; run `niview auth login`")
+        raise AuthError(None, "no NIVIEW_UID in env; run `niview auth login`")
     client = NiViewClient(host=cfg.host, token=cfg.token)
     devices = client.devices(cfg.uid)
     return {
