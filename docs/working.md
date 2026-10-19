@@ -7,8 +7,6 @@
 - Scaffolded the public repo with docs, CI, Docker files, and a public skill entry point.
 - Implemented the cloud client, token exchange, event polling, and snapshot decryption.
 - Added offline unit tests and opt-in integration tests.
-- Ran the independent review and addressed its findings.
-- Merged the implementation pull request.
 
 ## Lessons Learned
 

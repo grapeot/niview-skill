@@ -42,8 +42,8 @@ niview auth login --mode interactive
 1Password:
 
 ```bash
-export NIVIEW_OP_ACCOUNT='op://private/niview/username'
-export NIVIEW_OP_PASSWORD='op://private/niview/password'
+export NIVIEW_OP_ACCOUNT='op://your-vault/your-item/username'
+export NIVIEW_OP_PASSWORD='op://your-vault/your-item/password'
 niview auth login --mode 1password
 ```
 
